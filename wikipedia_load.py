@@ -14,7 +14,7 @@
 # ---
 
 # %% [markdown]
-# # To be defined...
+# # Fiding Structure in Wikipedia
 
 # %% [markdown]
 # Wikipedia uses templates to standardize articles in the same category and to define a standard for the way specific types of information are displayed (e.g., info boxes). Acording to [Wikipedia](https://en.wikipedia.org/wiki/Help:Template):
@@ -23,11 +23,19 @@
 #
 # This makes the information more uniform and easy to read. However, in order to extract the information from an article, we have to parse the template. Fortunately, there is a python package that does the extraction magic for us: [wikitextparser](https://pypi.org/project/wikitextparser)
 
+# %% [markdown]
+# # Configuration
+#
+# The parquet version of Wikipedia we generated in the [previous article](../loading-wikipedia-data-with-python) has around 28GB. In order to deal with such amount of data, we are going to use [dask](https://dask.org/).
+#
+# Dask is an open source library that allows you to load data larger than the memory by working in chunks of data. It also allows parallel processing and provides a nice dashboard to visualize the progress of your tasks.
+
 # %%
 import dask.dataframe as dd
 import pandas as pd
 import wikitextparser as wtp
 import re
+from collections import Counter
 
 # load/import classes
 from dask.distributed import Client
@@ -40,7 +48,7 @@ client = Client(n_workers=8,
 # Check http://127.0.0.1:8787/status for the dashboard
 
 # %% [markdown]
-# ## Selecting relevant articles
+# # Selecting Relevant Information
 #
 # In order to filter out articles that we are not interested, we will remove articles with 250 characters or less and articles from [special namespaces]([https://en.wikipedia.org/wiki/Wikipedia:Namespace).
 
@@ -61,6 +69,11 @@ ddf = ddf[ddf['title']
                  meta=('title', 'bool'))]
 
 
+# %% [markdown]
+# # Extracting Infoboxes
+#
+# In order to speed-up next executions, we are going to store the infobox information extracted. It should take around 1.8GB of space in disk. Notice that we are storing only the rows where the infobox is not null.
+
 # %%
 # %%time
 def get_root_infobox(article):
@@ -80,11 +93,11 @@ ddf['infobox'] = (
     .apply(get_root_infobox, meta=('infobox', 'object'))
 )
 # Store them into parquet
-ddf.loc[ddf['infobox'].notnull(), ['title', 'infobox']].to_parquet('wiki_parquet_infobox')
+ddf.loc[ddf['infobox'].notnull(), ['index', 'infobox']].to_parquet('wiki_parquet_infobox')
 
 # %%
 # %%time
-re_infobox_type = re.compile(r'\{\{infobox (.+?)[|\n(:?<!--)]', 
+re_infobox_type = re.compile(r'\{\{infobox[ _](.+?)[|\n(:?<!--)\}]', 
                              flags=re.IGNORECASE)
 
 def get_infobox_type(infoboxes):
@@ -92,7 +105,7 @@ def get_infobox_type(infoboxes):
     for s_infobox in infoboxes:
         re_res = re_infobox_type.findall(s_infobox)
         if len(re_res) > 0:
-            infobox_types.append(re_res[0])
+            infobox_types.append(re_res[0].lower().strip())
     return infobox_types
         
 ddf_infobox_types = dd.read_parquet("wiki_parquet_infobox/*.parquet", engine="pyarrow")
@@ -102,24 +115,64 @@ ddf_infobox_types['infobox_type'] = (
     .apply(get_infobox_type, meta=('infobox_types', 'object'))
 )
 
-df_infobox_types = ddf_infobox_types[['title', 'infobox_type']].compute()
+df_infobox_types = ddf_infobox_types[['index', 'title', 'infobox_type']].compute()
 
 # %%
-
-
-df_infobox_types
+# df_infobox_types['n_types'] = df_infobox_types.infobox_type.apply(lambda _: len(_))
 
 # %%
-from collections import Counter
-
 cnt = Counter()
 
-for row in ddf_infobox_types:
-    if len(row) > 1:
-        cnt[row[0]] += 1
+for row in df_infobox_types.infobox_type:
+    if len(row) > 0:
+        for type_ in row:
+            cnt[type_.lower()] += 1
+            
+s_infobox_count = pd.Series(cnt).sort_values(ascending=False)
 
 # %%
-cnt
+# df_infobox_types[lambda _: _.infobox_type.apply(lambda _: 'university' in _)]
+
+# %%
+infobox_type_dict = dict(
+    person={'person', 'football biography', 'officeholder',
+            'musical artist', 'sportsperson', 'scientist',
+            'military person', 'writer', 'cricketer',
+            'baseball biography',},
+    place={'settlement', 'nrhp', 'station', 'french commune',
+           'school', 'river', 'uk place', 'university', 
+           'road'},
+    music={'album', 'song'},
+    film={'film', 'television'},
+    organization={'company'},
+    publication={'book'},
+    ship={'ship career', 'ship characteristics', 'ship begin',
+          'ship image', },
+    sports={'ncaa team season'},
+    game={'video game'}
+)
+
+# s_infobox_count.to_frame().assign(cumsum=lambda _:_[0].cumsum()).iloc[20:40,:]
+def classify_infobox(types):
+    classes = set()
+    for type_ in types:
+        for k, set_ in infobox_type_dict.items():
+            if type_ in set_:
+                classes.add(k)
+    return classes
+
+
+# %%
+(
+    df_infobox_types
+    .sample(frac=0.1)
+    .assign(infobox_class=lambda _: _.infobox_type.apply(classify_infobox))
+    .assign(count_class=lambda _: _.infobox_class.apply(lambda _: len(_)))
+    .loc[lambda _: _.count_class > 1]
+)    
+
+# %%
+set_
 
 # %%
 # articles = ddf['article'].sample(0.005).compute()
