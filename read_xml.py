@@ -42,7 +42,7 @@ def extract_bz2(path_bz2, output_folder=None):
     with bz2.BZ2File(path_bz2) as fr, open(output_path, "wb") as fw:
         shutil.copyfileobj(fr, fw, length = 1000000)
 
-def wiki_xml_to_parquet(path_xml, output_folder=None, max_memory=500000):
+def wiki_xml_to_parquet(path_xml, output_folder=None, max_memory=500):
     def get_article(article):
         ns = {'mw': 'http://www.mediawiki.org/xml/export-0.10/'}
 
@@ -66,11 +66,14 @@ def wiki_xml_to_parquet(path_xml, output_folder=None, max_memory=500000):
     page_tag = '{http://www.mediawiki.org/xml/export-0.10/}page'
     articles = []
     file_counter = 0
+    # Convert MB to Bytes
+    max_memory = max_memory * 1024**2
     mem_size = 0
 
     for _, art in tqdm(etree.iterparse(str(path_xml), tag=page_tag)):
         new_article = get_article(art)
         articles.append(new_article)
+        # Increment the variable by the size of article content (in bytes)
         mem_size += sys.getsizeof(new_article[2])
         art.clear()
         # Eliminate empty references from the root node to elem
@@ -78,7 +81,6 @@ def wiki_xml_to_parquet(path_xml, output_folder=None, max_memory=500000):
             while ancestor.getprevious() is not None:
                 del ancestor.getparent()[0]
 
-        batch_counter += 1
         if mem_size >= max_memory:
             parquet_path = output_path.parent / (output_path.name + '_{:03d}.parquet'.format(file_counter))
             logging.info(f"\nWriting to file {parquet_path}")
