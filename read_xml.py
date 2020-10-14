@@ -40,14 +40,14 @@ def extract_bz2(path_bz2, output_folder=None):
     else:
         output_path = Path(output_folder).joinpath(path_bz2.stem)
     with bz2.BZ2File(path_bz2) as fr, open(output_path, "wb") as fw:
-        shutil.copyfileobj(fr, fw, length = 1000000)
+        shutil.copyfileobj(fr, fw, length=2000000)
 
-def wiki_xml_to_parquet(path_xml, output_folder=None, max_memory=500):
+def wiki_xml_to_parquet(path_xml, output_folder=None, max_memory=250):
     def get_article(article):
         ns = {'mw': 'http://www.mediawiki.org/xml/export-0.10/'}
 
         return (
-            article.xpath('./mw:id', namespaces=ns)[0].text,
+            int(article.xpath('./mw:id', namespaces=ns)[0].text),
             article.xpath('./mw:title', namespaces=ns)[0].text,
             article.xpath('./mw:revision/mw:text', namespaces=ns)[0].text
         )
@@ -123,38 +123,40 @@ def make_database(root_folder):
 
 
 # %%
-df = make_database('articles')
-root_folder = 'articles'
+def process_bz2_folder(root_folder):
+    def _xml_path(f):
+        return os.path.join(root_folder, 'xml', f.rsplit('.', 1)[0])
+    def _bz2_path(f):
+        return os.path.join(root_folder, 'bz2', f)
+    def _remove_file(path):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
 
-for i, row in df.head(5).iterrows():
-    logging.info(f'Processing {i}')
+    df_articles = make_database(root_folder)
+    for i, row in df_articles.iterrows():
+        logging.info(f'Processing {i}')
+        # if row['xml'] or row['parquet']:
+        #     # Delete the bz2 file
+        #     _remove_file(_bz2_path(i))
+        if row['parquet']:
+            # Delete the xml file
+            _remove_file(_xml_path(i))
+        else:
+            if not row['xml']:
+                #TODO: Add `if not row['bz2']`
+                logging.info(f"Extracting {i}")
+                extract_bz2(_bz2_path(i), os.path.join(root_folder, 'xml'))
+                # Delete the bz2 file
+                shutil.rmtree(_bz2_path(i), ignore_errors=True)
 
-    _xml_path = lambda f: os.path.join(root_folder, 'xml', f.rsplit('.', 1)[0])
-    _bz2_path = lambda f: os.path.join(root_folder, 'bz2', f)
+            logging.info(f"Converting {i.rsplit('.', 1)[0]} to parquet")
+            wiki_xml_to_parquet(_xml_path(i), os.path.join(root_folder, 'parquet'))
+            # Delete the xml file
+            shutil.rmtree(_xml_path(i), ignore_errors=True)
 
-    if row['xml'] or row['parquet']:
-        # Delete the bz2 file
-        shutil.rmtree(_bz2_path(i), ignore_errors=True)
-    if row['parquet']:
-        # Delete the xml file
-        shutil.rmtree(_xml_path(i), ignore_errors=True)
-    if not row['parquet']:
-        if not row['xml']:
-            #TODO: Add `if not row['bz2']`
-            logging.info(f"Extracting {i}")
-            extract_bz2(_bz2_path(i), os.path.join(root_folder, 'xml'))
-            # Delete the bz2 file
-            shutil.rmtree(_bz2_path(i), ignore_errors=True)
-
-        logging.info(f"Converting {i.rsplit('.', 1)[0]} to parquet")
-        wiki_xml_to_parquet(_xml_path(i), os.path.join(root_folder, 'parquet'))
-        # Delete the xml file
-        shutil.rmtree(_xml_path(i), ignore_errors=True)
-
-    logging.info(f'Done!')
+        logging.info(f'Done!')
 
 # %%
-# df = make_database('articles')
-# df.head()
-
-# %%
+process_bz2_folder('/run/media/luiz/Elements/wikifiles/')
