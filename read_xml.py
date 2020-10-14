@@ -25,6 +25,8 @@ import os
 import re
 import logging
 
+logging.getLogger().setLevel(logging.INFO)
+
 url_wikidump = "https://ftp.acc.umu.se/mirror/wikimedia.org/dumps/enwiki/20200920/"
 
 
@@ -60,7 +62,7 @@ def wiki_xml_to_parquet(path_xml, output_folder=None, batch_size=100000):
     file_counter = 0
     batch_counter = 0
 
-    for _, art in tqdm(etree.iterparse(path_xml, tag=page_tag)):
+    for _, art in tqdm(etree.iterparse(str(path_xml), tag=page_tag)):
         articles.append(get_article(art))
         art.clear()
         # Eliminate empty references from the root node to elem
@@ -70,19 +72,21 @@ def wiki_xml_to_parquet(path_xml, output_folder=None, batch_size=100000):
 
         batch_counter += 1
         if batch_counter >= batch_size:
-            print("\nWriting to file")
-            pd.DataFrame(
-                articles, columns=['id', 'title', 'content']
-            ).to_parquet(path_xml.parent / (path_xml.name + '_{:03d}.parquet'.format(file_counter)))
+            parquet_path = output_path.parent / (output_path.name + '_{:03d}.parquet'.format(file_counter))
+            logging.info(f"\nWriting to file {parquet_path}")
+            pd.DataFrame(articles, columns=['id', 'title', 'content']).to_parquet(parquet_path)
 
-            # for art in articles:
-            #     del art
-
+            for art in articles:
+                del art
             del articles
 
             articles = []
             file_counter += 1
             batch_counter = 0
+    if len(articles) > 0:
+        parquet_path = output_path.parent / (output_path.name + '_{:03d}.parquet'.format(file_counter))
+        logging.info(f"\nWriting to file {parquet_path}")
+        pd.DataFrame(articles, columns=['id', 'title', 'content']).to_parquet(parquet_path)
 
 
 # %%
@@ -115,7 +119,9 @@ df = make_database('articles')
 # %%
 root_folder = 'articles'
 
-for i, row in df.head(1).iterrows():
+for i, row in df.head(2).iterrows():
+    logging.info(f'Processing {i}')
+    
     _xml_path = lambda f: os.path.join(root_folder, 'xml', f.rsplit('.', 1)[0])
     _bz2_path = lambda f: os.path.join(root_folder, 'bz2', f)
 
@@ -127,15 +133,20 @@ for i, row in df.head(1).iterrows():
         shutil.rmtree(_xml_path(i), ignore_errors=True)
     if not row['parquet']:
         if not row['xml']:
-            
+            logging.info(f"Extracting {i}")
             extract_bz2(_bz2_path(i), os.path.join(root_folder, 'xml'))
             # Delete the bz2 file
             shutil.rmtree(_bz2_path(i), ignore_errors=True)
         
-        print(_xml_path(i))
-        
-#         wiki_xml_to_parquet(_xml_path(i), os.path.join(root_folder, 'parquet'))
-#         # Delete the xml file
-#         shutil.rmtree(_xml_path(i), ignore_errors=True)
+        logging.info(f"Converting {i.rsplit('.', 1)[0]} to parquet")
+        wiki_xml_to_parquet(_xml_path(i), os.path.join(root_folder, 'parquet'))
+        # Delete the xml file
+        shutil.rmtree(_xml_path(i), ignore_errors=True)
+    
+    logging.info(f'Done!')
+
+# %%
+df = make_database('articles')
+df.head()
 
 # %%
