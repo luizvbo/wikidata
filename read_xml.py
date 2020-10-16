@@ -14,13 +14,14 @@
 # ---
 
 # %%
+from pathlib import Path
 import pandas as pd
 from lxml import etree
 from glob import glob
-import bz2
 from tqdm import tqdm
 import shutil
-from pathlib import Path
+from typing import Optional
+import bz2
 import os
 import sys
 import re
@@ -32,8 +33,17 @@ url_wikidump = (
     "https://ftp.acc.umu.se/mirror/wikimedia.org/dumps/enwiki/20200920/"
 )
 
+
 # %%
-def extract_bz2(path_bz2, output_folder=None):
+def extract_bz2(path_bz2: str, output_folder: Optional[str] = None):
+    """Extract a Wikipedia bz2 file.
+
+    Args:
+        path_bz2 (str): Path to the bz2 file
+        output_folder (Optional[str], optional): Path to the folder where to
+            extract the file. If the output folder is not provided, it extracts
+            to the folder containing the input file. Defaults to None.
+    """
     path_bz2 = Path(path_bz2)
     assert path_bz2.suffix == '.bz2'
     if output_folder is None:
@@ -43,8 +53,22 @@ def extract_bz2(path_bz2, output_folder=None):
     with bz2.BZ2File(path_bz2) as fr, open(output_path, "wb") as fw:
         shutil.copyfileobj(fr, fw, length=2000000)
 
-def wiki_xml_to_parquet(path_xml, output_folder=None, max_memory=250):
+
+def wiki_xml_to_parquet(path_xml: str, output_folder: Optional[str] = None,
+                        max_memory: int = 250):
+    """Convert a Wikipedia XML file into parquet files
+
+    Args:
+        path_xml (str): Path to the xml file
+        output_folder (Optional[str], optional): Path to the folder where to
+            store the files. If the output folder is not provided, it extracts
+            to the folder containing the input file. Defaults to None.
+        max_memory (int): Rough estimate of size in memory (in MB) before start
+            writing to file. When the size of the list of articles in memory
+            reach this number, a new parquet file is written. Defaults to 250.
+    """
     def get_article(article):
+        """Convert an lxml object of an article to a tuple"""
         ns = {'mw': 'http://www.mediawiki.org/xml/export-0.10/'}
 
         return (
@@ -54,6 +78,7 @@ def wiki_xml_to_parquet(path_xml, output_folder=None, max_memory=250):
         )
 
     def free_articles(articles):
+        """Free resource used by the list of articles."""
         for art in articles:
             del art
         del articles
@@ -83,9 +108,13 @@ def wiki_xml_to_parquet(path_xml, output_folder=None, max_memory=250):
                 del ancestor.getparent()[0]
 
         if mem_size >= max_memory:
-            parquet_path = output_path.parent / (output_path.name + '_{:03d}.parquet'.format(file_counter))
+            parquet_path = (
+                output_path.parent /
+                (output_path.name + '_{:03d}.parquet'.format(file_counter))
+            )
             logging.info(f"\nWriting to file {parquet_path}")
-            pd.DataFrame(articles, columns=['id', 'title', 'content']).to_parquet(parquet_path)
+            pd.DataFrame(articles, columns=['id', 'title', 'content'])\
+                .to_parquet(parquet_path)
 
             free_articles(articles)
 
@@ -93,9 +122,14 @@ def wiki_xml_to_parquet(path_xml, output_folder=None, max_memory=250):
             file_counter += 1
             mem_size = 0
     if len(articles) > 0:
-        parquet_path = output_path.parent / (output_path.name + '_{:03d}.parquet'.format(file_counter))
+        # Write the last articles to file
+        parquet_path = (
+            output_path.parent /
+            (output_path.name + '_{:03d}.parquet'.format(file_counter))
+        )
         logging.info(f"\nWriting to file {parquet_path}")
-        pd.DataFrame(articles, columns=['id', 'title', 'content']).to_parquet(parquet_path)
+        pd.DataFrame(articles, columns=['id', 'title', 'content'])\
+            .to_parquet(parquet_path)
         free_articles(articles)
 
 
@@ -110,11 +144,14 @@ def make_database(root_folder):
         .set_index('Name')
     )
 
-    bz2_files = set([_.rsplit('/', 1)[-1] for _ in glob(os.path.join(root_folder, 'bz2/*bz2'))])
+    bz2_files = set([_.rsplit('/', 1)[-1]
+                     for _ in glob(os.path.join(root_folder, 'bz2/*bz2'))])
     xml_files = set([_.rsplit('/', 1)[-1] + '.bz2'
                      for _ in glob(os.path.join(root_folder, 'xml/*xml*'))])
-    prq_files = set([re.sub(rf'_\d{3}\.parquet', '.bz2', _.rsplit('/', 1)[-1])
-                     for _ in glob(os.path.join(root_folder, 'parquet/*parquet'))])
+    prq_files = set(
+        [re.sub(rf'_\d{3}\.parquet', '.bz2', _.rsplit('/', 1)[-1])
+         for _ in glob(os.path.join(root_folder, 'parquet/*parquet'))]
+    )
 
     df_links.loc[bz2_files, 'bz2'] = True
     df_links.loc[xml_files, 'xml'] = True
@@ -124,11 +161,13 @@ def make_database(root_folder):
 
 
 # %%
-def process_bz2_folder(root_folder):
+def process_bz2_folder(root_folder, delete_xml=True, delete_bz2=False):
     def _xml_path(f):
         return os.path.join(root_folder, 'xml', f.rsplit('.', 1)[0])
+
     def _bz2_path(f):
         return os.path.join(root_folder, 'bz2', f)
+
     def _remove_file(path):
         try:
             os.remove(path)
@@ -138,26 +177,29 @@ def process_bz2_folder(root_folder):
     df_articles = make_database(root_folder)
     for i, row in df_articles.iterrows():
         logging.info(f'Processing {i}')
-        # if row['xml'] or row['parquet']:
-        #     # Delete the bz2 file
-        #     _remove_file(_bz2_path(i))
-        if row['parquet']:
+        if delete_bz2 and (row['xml'] or row['parquet']):
+            # Delete the bz2 file
+            _remove_file(_bz2_path(i))
+        if row['parquet'] and delete_xml:
             # Delete the xml file
             _remove_file(_xml_path(i))
         else:
             if not row['xml']:
-                #TODO: Add `if not row['bz2']`
+                # TODO: Add `if not row['bz2']`
                 logging.info(f"Extracting {i}")
                 extract_bz2(_bz2_path(i), os.path.join(root_folder, 'xml'))
-                # Delete the bz2 file
-                _remove_file(_bz2_path(i))
+                if delete_bz2:
+                    # Delete the bz2 file
+                    _remove_file(_bz2_path(i))
 
             logging.info(f"Converting {i.rsplit('.', 1)[0]} to parquet")
-            wiki_xml_to_parquet(_xml_path(i), os.path.join(root_folder, 'parquet'))
-            # Delete the xml file
-            _remove_file(_xml_path(i))
+            wiki_xml_to_parquet(_xml_path(i),
+                                os.path.join(root_folder, 'parquet'))
+            if delete_xml:
+                # Delete the xml file
+                _remove_file(_xml_path(i))
 
-        logging.info(f'Done!')
+        logging.info('Done!')
 
 # %%
 process_bz2_folder('/run/media/luiz/Elements/wikifiles/')
