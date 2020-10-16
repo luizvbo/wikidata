@@ -28,8 +28,9 @@ import logging
 
 logging.getLogger().setLevel(logging.INFO)
 
-url_wikidump = "https://ftp.acc.umu.se/mirror/wikimedia.org/dumps/enwiki/20200920/"
-
+url_wikidump = (
+    "https://ftp.acc.umu.se/mirror/wikimedia.org/dumps/enwiki/20200920/"
+)
 
 # %%
 def extract_bz2(path_bz2, output_folder=None):
@@ -104,7 +105,7 @@ def make_database(root_folder):
         pd.read_html(url_wikidump)[0][['Name', 'Last modified', 'Size']]
         .dropna(how='all')
         .loc[lambda df: df.Name.apply(lambda el: re.match(
-            'enwiki-20200920-pages-articles\d+\.xml', el) is not None
+            r'enwiki-20200920-pages-articles\d+\.xml', el) is not None
         )]
         .set_index('Name')
     )
@@ -112,7 +113,7 @@ def make_database(root_folder):
     bz2_files = set([_.rsplit('/', 1)[-1] for _ in glob(os.path.join(root_folder, 'bz2/*bz2'))])
     xml_files = set([_.rsplit('/', 1)[-1] + '.bz2'
                      for _ in glob(os.path.join(root_folder, 'xml/*xml*'))])
-    prq_files = set([re.sub('_\d{3}\.parquet', '.bz2', _.rsplit('/', 1)[-1])
+    prq_files = set([re.sub(rf'_\d{3}\.parquet', '.bz2', _.rsplit('/', 1)[-1])
                      for _ in glob(os.path.join(root_folder, 'parquet/*parquet'))])
 
     df_links.loc[bz2_files, 'bz2'] = True
@@ -149,12 +150,12 @@ def process_bz2_folder(root_folder):
                 logging.info(f"Extracting {i}")
                 extract_bz2(_bz2_path(i), os.path.join(root_folder, 'xml'))
                 # Delete the bz2 file
-                shutil.rmtree(_bz2_path(i), ignore_errors=True)
+                _remove_file(_bz2_path(i))
 
             logging.info(f"Converting {i.rsplit('.', 1)[0]} to parquet")
             wiki_xml_to_parquet(_xml_path(i), os.path.join(root_folder, 'parquet'))
             # Delete the xml file
-            shutil.rmtree(_xml_path(i), ignore_errors=True)
+            _remove_file(_xml_path(i))
 
         logging.info(f'Done!')
 
